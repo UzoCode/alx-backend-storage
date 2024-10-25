@@ -1,60 +1,107 @@
 #!/usr/bin/env python3
-"""Creates `Cache` class"""
-from redis import Redis
-from typing import Callable, Optional, Union
+"""
+The Redis module
+"""
+import sys
+from functools import wraps
+from typing import Union, Optional, Callable
 from uuid import uuid4
+
+import redis
+
+UnionOfTypes = Union[str, bytes, int, float]
+
+
+def count_calls(method: Callable) -> Callable:
+    """
+    A system that counts number of
+    times the methods of Cache class are called.
+    :param method:
+    :return:
+    """
+    key = method.__qualname__
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        """
+        Wraps
+        :param self:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        self._redis.incr(key)
+        return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+def call_history(method: Callable) -> Callable:
+    """
+    Adds its input parameters to a list
+    in redis, then stores its output into another list.
+    :param method:
+    :return:
+    """
+    key = method.__qualname__
+    i = "".join([key, ":inputs"])
+    o = "".join([key, ":outputs"])
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        """ The Wrapper """
+        self._redis.rpush(i, str(args))
+        res = method(self, *args, **kwargs)
+        self._redis.rpush(o, str(res))
+        return res
+
+    return wrapper
 
 
 class Cache:
-    """Representation of Cache
-    Attributes:
-       _redis(obj:redis): an instance of redis client.
-    Methods:
-        store(data) -> string: Generates random key
     """
+    The Cache redis class
+    """
+
     def __init__(self):
-        """Initializes `Cache` instance"""
-        self._redis = Redis()
+        """
+        constructor for the redis model
+        """
+        self._redis = redis.Redis()
         self._redis.flushdb()
 
-    def get(self, key: str,
-            fn: Optional[Callable[
-                [bytes], Union[str, bytes, int, float]
-            ]] = None) -> Union[str, bytes, int, float, None]:
-        """Get a value from the database and convert to
-        correct type using <fn>
-        Params:
-           key(str): The key of db item
-           fn(obj:callable): function for conversion
+    @count_calls
+    @call_history
+    def store(self, data: UnionOfTypes) -> str:
         """
-        if not key or not (data := self._redis.get(key)):
-            None
-        if not fn:
-            return data
-        return fn(data)
-
-    def get_int(self, key: str) -> Union[int, None]:
-        """Converts value of key to type int"""
-        if not key:
-            return None
-        data: bytes = self.__redis.get(key)
-        if not data:
-            return None
-        return self.get(key, int.from_bytes)
-
-    def get_str(self, key: str) -> Union[str, None]:
-        """Converts value of key to type str"""
-        if not key:
-            return None
-        data: bytes = self.__redis.get(key)
-        if not data:
-            return None
-        return self.get(key, lambda val: val.decode("utf-8"))
-
-    def store(self, data: Union[str, bytes, int, float]) -> str:
-        """Generates random key then stores the input data
-        in Redis using the random key and returns the key.
+        Generates a random key (e.g. using uuid),
+         stores the input data in Redis using the
+          random key then return the key.
+        :param data:
+        :return:
         """
-        key: str = str(uuid4())
-        self._redis.set(key, data)
+        key = str(uuid4())
+        self._redis.mset({key: data})
         return key
+
+    def get(self, key: str, fn: Optional[Callable] = None) \
+            -> UnionOfTypes:
+        """
+        Converts data back
+        to desired format
+        :param key:
+        :param fn:
+        :return:
+        """
+        if fn:
+            return fn(self._redis.get(key))
+        data = self._redis.get(key)
+        return data
+
+    def get_int(self: bytes) -> int:
+        """Gets number"""
+        return int.from_bytes(self, sys.byteorder)
+
+    def get_str(self: bytes) -> str:
+        """Gets string"""
+        return self.decode("utf-8")
